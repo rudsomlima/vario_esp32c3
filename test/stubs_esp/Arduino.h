@@ -4,6 +4,32 @@
 #include <stddef.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#include <string>
+#define PROGMEM
+#define F(s) (s)
+#define FPSTR(p) (p)
+#define constrain(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))
+class String {
+public:
+  std::string s;
+  String() {}
+  String(const char *c) : s(c) {}
+  String(float v, unsigned int d) { char b[32]; snprintf(b, sizeof b, "%.*f", (int)d, v); s = b; }
+  String &operator+=(const String &o) { s += o.s; return *this; }
+  String &operator+=(const char *c) { s += c; return *this; }
+  String &operator+=(char c) { s += c; return *this; }
+  String &operator+=(int v) { s += std::to_string(v); return *this; }
+  friend String operator+(const String &a, const String &b) { String r = a; r += b; return r; }
+  friend String operator+(const String &a, const char *b) { String r = a; r += b; return r; }
+  float toFloat() const { return (float)atof(s.c_str()); }
+  long toInt() const { return atol(s.c_str()); }
+  unsigned int length() const { return (unsigned)s.size(); }
+  const char *c_str() const { return s.c_str(); }
+};
+struct EspClass { void restart() {} };
+static EspClass ESP;
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif

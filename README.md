@@ -1,6 +1,6 @@
-# Vario ESP32-C3 — Fase 3 (BLE para XCTrack)
+# Vario ESP32-C3 — Fase 4 (portal de configuração)
 
-Vario sonoro com fusão acelerômetro + barômetro (Kalman), para parapente. A CPU dorme em light sleep entre as amostras e é acordada 50 vezes por segundo pelo INT do MPU-6050. Opcionalmente, envia `$LK8EX1` por Bluetooth LE para o XCTrack ou o XCSoar.
+Vario sonoro com fusão acelerômetro + barômetro (Kalman), para parapente. A CPU dorme em light sleep entre as amostras e é acordada 50 vezes por segundo pelo INT do MPU-6050. Opcionalmente, envia `$LK8EX1` por Bluetooth LE para o XCTrack ou o XCSoar. Um portal Wi-Fi, que só liga quando você pede, permite ajustar tudo pelo celular.
 
 **Hardware:** ESP32-C3 SuperMini + GY-521 (MPU-6050) + GY-63 (MS5611) + piezo passivo + botão + LiPo via TP4056.
 
@@ -41,7 +41,8 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 1. Arduino IDE com o core **esp32 da Espressif, versão 3.x** (Gerenciador de Placas).
 2. Placa **ESP32C3 Dev Module**, com **USB CDC On Boot = Enabled**.
 3. Instalar a biblioteca **NimBLE-Arduino 2.x** (h2zero) pelo Gerenciador de Bibliotecas.
-4. Abrir `vario_esp32c3.ino` e gravar.
+4. **Tools → Partition Scheme → "Minimal SPIFFS (1.9MB APP with OTA)"**. Com Wi-Fi + BLE, o firmware não cabe na partição padrão (1,2 MB), e esse esquema mantém a atualização pelo portal (OTA).
+5. Abrir `vario_esp32c3.ino` e gravar.
 
 **Gravar com o vario ligado:** no light sleep a porta USB some do PC. Para gravar:
 - desligue o vario (botão 2 s) e conecte o USB, ou
@@ -61,6 +62,7 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 | 1 clique | Volume: mudo → baixo → médio → alto (fica salvo para o próximo voo) |
 | 2 cliques | Liga/desliga o BLE (fica salvo). Liga = dois bipes subindo; desliga = dois descendo |
 | Segurar 2 s | Desliga (três tons descendo) |
+| Ligar e **continuar segurando** até ~4 s | **Portal de configuração** (três bipes agudos subindo: solte o botão) |
 | 20 min sem subir/descer e sem girar | Desliga sozinho (`autoOffMin`) |
 | BLE ligado e nenhum celular conectado por 5 min | Só o BLE desliga (dois bipes descendo) e o vario volta ao modo econômico. No próximo boot ele tenta de novo |
 | 2 bipes graves no boot | MS5611 não encontrado (fiação ou endereço) |
@@ -71,7 +73,7 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 **Som:**
 - **Bipes** a partir de +0,1 m/s. Sobem de tom e ficam mais rápidos com a subida.
 - **Tom contínuo grave** abaixo de −2,5 m/s (alarme de afundamento).
-- Os limiares, tons e filtros ficam em `settings.h` e são salvos na flash. Na fase 4 eles poderão ser editados pelo portal de configuração.
+- Os limiares, tons e filtros são salvos na flash e editados pelo portal. Os padrões ficam em `settings.h`.
 
 ## Testes em solo (antes de voar)
 
@@ -91,17 +93,40 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 
 O vario do har-in-air usa o mesmo serviço (Nordic UART) e foi validado com o XCTrack. Este firmware ainda não foi testado com o app.
 
+## Portal de configuração
+
+1. **Ligue o vario segurando o botão e continue segurando** até ouvir três bipes agudos subindo (~4 s). Solte.
+2. No celular, conecte na rede **`Vario-C3-XXXX`**, senha **`vario1234`**. A página costuma abrir sozinha. Se não abrir, acesse **http://192.168.4.1**.
+3. Ajuste o que quiser. Os botões **Testar o som** tocam ~3 s do vario simulando +0,5 / +2 / +5 / −3 m/s **com os valores da tela, sem salvar**. Dá para afinar o som ali mesmo, no chão.
+4. **Salvar e voltar ao vario**: grava e reinicia já no modo de voo.
+
+| O que tem na página | |
+|---|---|
+| Som | Volume inicial, início do bipe, alarme de afundamento, tom em 0 m/s, subida do tom, ciclo do bipe |
+| Filtros | Velocidade em térmica (compensação centrífuga), confiança no acelerômetro, ruído do barômetro |
+| Energia | Auto-desligar |
+| Bluetooth | Ligar BLE ao ligar, taxa do $LK8EX1, desligar sem conexão |
+| Portal | Senha do Wi-Fi |
+| Atualizar firmware | Envia o `.bin` (Arduino IDE: *Sketch → Exportar binário compilado*). Se falhar, o firmware anterior continua |
+| Restaurar padrões | Volta tudo ao `settings.h`, inclusive a senha `vario1234` |
+
+**Por que não fica ligado gastando bateria:**
+- O portal **só liga sob demanda**, segurando o botão no boot. No uso normal o Wi-Fi nunca é iniciado.
+- Enquanto o portal está ativo, **o vario não funciona** e toca um **bipe curto a cada 5 s**. Não dá para decolar sem perceber.
+- **Desliga sozinho** depois de 10 min sem acesso à página. Também desliga com o botão segurado por 2 s.
+- O Wi-Fi transmite com potência reduzida (8,5 dBm), porque o celular está ao lado.
+
 ## Ajuste fino (depois dos primeiros voos)
 
-Os nomes abaixo são campos de `Settings`, em `settings.h`.
+Tudo isto se ajusta pelo portal. Entre parênteses, o nome do campo em `settings.h`.
 
 | Sintoma | O que mexer |
 |---|---|
-| Som "nervoso" demais em turbulência | Aumentar `kfBaro` (0,25 → 0,4) ou diminuir `kfAcc` |
-| Demora a reagir na entrada da térmica | Aumentar `kfAcc` (0,35 → 0,5) |
-| Subida falsa ao centrar a térmica | Diminuir `airspeed` (é melhor errar para menos) |
-| Afundamento falso ao sair da curva | Aumentar `airspeed` aos poucos |
-| Apita no planeio com ar parado | Subir `liftOn` |
+| Som "nervoso" demais em turbulência | Aumentar o ruído do barômetro (`kfBaro`, 0,25 → 0,4) ou diminuir a confiança no acelerômetro (`kfAcc`) |
+| Demora a reagir na entrada da térmica | Aumentar a confiança no acelerômetro (`kfAcc`, 0,35 → 0,5) |
+| Subida falsa ao centrar a térmica | Diminuir a velocidade em térmica (`airspeed`). É melhor errar para menos |
+| Afundamento falso ao sair da curva | Aumentar a velocidade em térmica (`airspeed`) aos poucos |
+| Apita no planeio com ar parado | Subir o início do bipe (`liftOn`) |
 
 ## Simulação no PC
 
@@ -131,6 +156,12 @@ A simulação é idealizada: não tem turbulência real, vibração nem erro de 
 g++ -std=c++17 -Istubs_esp -I.. test_lk8ex1.cpp -o test_lk8ex1 && ./test_lk8ex1
 ```
 
+`test/render_portal.cpp` gera a página do portal em `test/portal_preview.html`, para ver no navegador do PC:
+
+```
+g++ -std=c++17 -Istubs_esp -I.. render_portal.cpp -o render_portal && ./render_portal
+```
+
 ## Consumo
 
 Estimativa com datasheets. **Não foi medido.**
@@ -145,6 +176,7 @@ Estimativa com datasheets. **Não foi medido.**
 | Apitando, com `PIEZO_KEEP_IN_SLEEP 1` | +~0,3–0,5 mA |
 | Apitando, com `PIEZO_KEEP_IN_SLEEP 0` | +~10 mA enquanto houver som |
 | **Com o BLE ativo** (sem light sleep, rádio ligado) | **~20–40 mA** no total |
+| Portal Wi-Fi (só em solo, no máximo 10 min sem uso) | ~80–100 mA |
 
 - **Autonomia:** ~55–65 h com 400 mAh sem BLE. A fase 1 dava ~13 h.
 - **Com BLE:** ~10–20 h com 400 mAh. É estimativa: o har-in-air **mediu ~85 mA** com BLE no vario dele, então meça o seu. Com o rádio ativo, este firmware não usa light sleep, porque o controlador BLE do core Arduino não aguenta o sleep manual. Por isso o BLE vem desligado e se desliga sozinho sem conexão.
@@ -165,7 +197,7 @@ Estimativa com datasheets. **Não foi medido.**
 
 ## Limitações
 
-- **Sem portal de configuração** (fase 4). Por enquanto, os padrões ficam em `settings.h`.
 - Com o BLE ativo, não há light sleep.
 - A calibração do acelerômetro corrige só a escala geral. Os offsets por eixo ficam com o estado de bias do Kalman.
-- O código não foi testado em hardware real. Só passou pela checagem de sintaxe com stubs e pela simulação.
+- O portal não tem login além da senha do Wi-Fi. Quem estiver conectado na rede do vario pode mudar as configurações e o firmware. Troque a senha padrão.
+- O código não foi testado em hardware real. Só passou pela checagem de sintaxe com stubs, pela simulação e pelos testes de PC (`test/`).

@@ -2,6 +2,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Preferences.h>
+#include <string.h>
 
 struct Settings {
   // som
@@ -21,6 +22,8 @@ struct Settings {
   bool    bleEnabled    = false;
   float   bleHz         = 10.0f;  // sentencas por segundo
   float   bleTimeoutMin = 5.0f;   // desliga o BLE se ninguem conectar (0 = nunca)
+  // portal de configuracao (Wi-Fi)
+  char    apPass[33]    = "vario1234";  // 8 a 32 caracteres (WPA2)
 };
 
 class SettingsStore {
@@ -44,6 +47,7 @@ public:
     s.bleEnabled    = p.getBool("ble", d.bleEnabled);
     s.bleHz         = p.getFloat("bleHz", d.bleHz);
     s.bleTimeoutMin = p.getFloat("bleTmo", d.bleTimeoutMin);
+    if (p.getString("apPass", s.apPass, sizeof(s.apPass)) == 0) strcpy(s.apPass, d.apPass);
     p.end();
     sanitize();
   }
@@ -65,6 +69,7 @@ public:
     p.putBool("ble", s.bleEnabled);
     p.putFloat("bleHz", s.bleHz);
     p.putFloat("bleTmo", s.bleTimeoutMin);
+    p.putString("apPass", s.apPass);
     p.end();
   }
 
@@ -96,5 +101,8 @@ private:
     s.autoOffMin    = clampf(s.autoOffMin, 0.0f, 240.0f, d.autoOffMin);
     s.bleHz         = clampf(s.bleHz, 1.0f, 10.0f, d.bleHz);
     s.bleTimeoutMin = clampf(s.bleTimeoutMin, 0.0f, 120.0f, d.bleTimeoutMin);
+    s.apPass[sizeof(s.apPass) - 1] = 0;
+    size_t n = strlen(s.apPass);
+    if (n < 8) strcpy(s.apPass, d.apPass);   // WPA2 exige >= 8
   }
 };

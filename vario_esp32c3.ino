@@ -1,11 +1,13 @@
 // vario_esp32c3.ino - Vario audio com fusao acelerometro + barometro
-// FASE 3: baixo consumo (light sleep) + BLE opcional ($LK8EX1 p/ XCTrack).
+// FASE 4: baixo consumo (light sleep) + BLE opcional ($LK8EX1 p/ XCTrack)
+//         + portal de configuracao por Wi-Fi (so sob demanda, em solo).
 //
 // Hardware: ESP32-C3 SuperMini + GY-521 (MPU-6050) + GY-63 (MS5611)
 //           + piezo passivo entre GPIO0 e GPIO1 + botao GPIO3->GND
 //           + LiPo via TP4056 (com protecao) no pino 5V
 // Core: Arduino-ESP32 3.x  |  Placa: "ESP32C3 Dev Module", USB CDC On Boot = Enabled
 // Biblioteca: NimBLE-Arduino 2.x (h2zero)
+// Particao: "Minimal SPIFFS (1.9MB APP with OTA)" (Wi-Fi + BLE nao cabem na padrao)
 //
 // Pinagem
 //   GPIO6 SDA, GPIO7 SCL -> MS5611 (0x77) + MPU-6050 (0x68), 3V3 e GND
@@ -17,6 +19,7 @@
 // Botao: 1 clique  = volume (mudo/baixo/medio/alto)
 //        2 cliques = liga/desliga BLE
 //        segurar 2 s = desliga | ligar = segurar ~1 s
+//        ligar e CONTINUAR segurando ate ~4 s (3 bipes agudos) = portal de configuracao
 //
 // Ciclo (50x por segundo):
 //   [light sleep] --INT do MPU--> le IMU -> Mahony -> Kalman predict
@@ -37,6 +40,7 @@
 #include "vario_audio.h"
 #include "piezo_idf.h"
 #include "ble_lk8ex1.h"
+#include "portal.h"
 
 // ---------------- configuracao de compilacao ----------------
 #define LOW_POWER            1  // 1 = light sleep entre amostras
@@ -44,6 +48,7 @@
                                 //     falhar/engasgar, ponha 0 (fica acordado so ao apitar)
 #define DEBUG_PLOT           0  // 1 = Serial Plotter. DESLIGA o sleep (o USB cai no light sleep)
 
+const char    FW_VERSION[] = "0.4.0";
 const char    BLE_NAME[] = "Vario-C3";
 const uint8_t PIN_SDA = 6, PIN_SCL = 7;
 const uint8_t PIN_MPU_INT = 5;
@@ -176,12 +181,24 @@ void setup() {
     if (millis() - t0 < 1000) goToSleep();
   }
 
+  cfg.load();
+  applySettings();
+
+  // Portal: continuar segurando o botao por mais ~3 s
+  if (digitalRead(PIN_BUTTON) == LOW) {
+    uint32_t t1 = millis();
+    while (digitalRead(PIN_BUTTON) == LOW && millis() - t1 < 3000) delay(10);
+    if (millis() - t1 >= 3000) {
+      piezo.setVolume(PiezoIDF::VOL_HIGH);
+      piezo.beep(1800, 80); delay(60); piezo.beep(2100, 80); delay(60); piezo.beep(2400, 150);
+      while (digitalRead(PIN_BUTTON) == LOW) delay(10);   // espera soltar
+      portal::run(cfg, piezo, FW_VERSION, readBatteryV, powerOff, PIN_BUTTON);  // nao retorna
+    }
+  }
+
 #if DEBUG_PLOT
   Serial.begin(115200);
 #endif
-
-  cfg.load();
-  applySettings();
 
   Wire.begin(PIN_SDA, PIN_SCL, 400000);
   if (!baro.begin(Wire)) fatal(2);       // 2 bipes graves = MS5611 nao encontrado / CRC

@@ -74,7 +74,7 @@ public:
     return true;
   }
 
-  void sleep() { writeReg(0x6B, 0x40); }   // ~5 uA
+  void sleep() { if (wire_) writeReg(0x6B, 0x40); }   // ~5 uA (ignora se nao iniciado)
 
   uint8_t whoAmI = 0;
 

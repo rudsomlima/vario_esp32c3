@@ -3,3 +3,4 @@ test/*.exe
 test/sim_flight
 build/
 .vscode/
+test/portal_preview.html
