@@ -1,0 +1,5 @@
+# binarios da simulacao
+test/*.exe
+test/sim_flight
+build/
+.vscode/
