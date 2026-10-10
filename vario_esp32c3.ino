@@ -4,7 +4,8 @@
 //
 // Hardware: ESP32-C3 SuperMini + GY-521 (MPU-6050) + GY-63 (MS5611)
 //           + piezo passivo entre GPIO0 e GPIO1 + botao GPIO3->GND
-//           + LiPo via TP4056 (com protecao) no pino 5V
+//           + LiPo via TP4056 (com protecao) -> diodo Schottky -> pino 5V
+//             (o diodo impede o USB da placa de jogar 5 V na bateria; ver docs/montagem.md)
 // Core: Arduino-ESP32 3.x  |  Placa: "ESP32C3 Dev Module", USB CDC On Boot = Enabled
 // Biblioteca: NimBLE-Arduino 2.x (h2zero)
 // Particao: "Minimal SPIFFS (1.9MB APP with OTA)" (Wi-Fi + BLE nao cabem na padrao)
