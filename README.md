@@ -35,7 +35,7 @@ O vario junta acelerômetro e barômetro num filtro de Kalman, para uma resposta
    - placa **ESP32C3 Dev Module**
    - **USB CDC On Boot: Enabled**
    - **Partition Scheme: Minimal SPIFFS (1.9MB APP with OTA)**
-3. **Clone** numa pasta chamada `vario_esp32c3`, abra `vario_esp32c3.ino` e grave. Use o modo de gravação: segure BOOT, aperte RESET, solte BOOT.
+3. **Clone** (`git clone https://github.com/rudsomlima/vario_esp32c3.git`), abra `vario_esp32c3.ino` e grave. Use o modo de gravação: segure BOOT, aperte RESET, solte BOOT.
 4. **Ligue:** segure o botão 1 s e deixe o vario parado 2 s. Toca um tom subindo seguido dos bipes de bateria.
 5. **Teste em solo** antes de voar: veja o [checklist](docs/manual-de-uso.md#antes-do-primeiro-voo).
 
@@ -96,3 +96,7 @@ Issues e pull requests são bem-vindos. Os mais úteis agora:
 ## Créditos
 
 Inspirado pelos projetos de vario do [har-in-air](https://github.com/har-in-air). Referências completas em [como-funciona.md](docs/como-funciona.md#referências-e-créditos).
+
+## Licença
+
+[GPL-3.0](LICENSE). Você pode usar, estudar, modificar e distribuir. Se distribuir uma versão modificada (inclusive gravada em aparelhos), o código-fonte dela também precisa ser disponibilizado sob a GPL-3.0.

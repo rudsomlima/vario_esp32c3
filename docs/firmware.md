@@ -16,10 +16,10 @@ Com Wi-Fi (portal) + BLE + servidor web, o firmware **não cabe na partição pa
 
 ## Baixar e compilar
 
-A Arduino IDE exige que a pasta tenha o mesmo nome do `.ino`. Clone com o nome `vario_esp32c3`:
+A Arduino IDE exige que a pasta tenha o mesmo nome do `.ino` (`vario_esp32c3`), o que o clone abaixo já faz:
 
 ```
-git clone https://github.com/<usuario>/<repositorio>.git vario_esp32c3
+git clone https://github.com/rudsomlima/vario_esp32c3.git
 ```
 
 Abra `vario_esp32c3/vario_esp32c3.ino`, selecione a placa e as opções da tabela acima e compile.
