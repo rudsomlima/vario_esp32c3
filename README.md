@@ -1,6 +1,6 @@
-# Vario ESP32-C3 — Fase 2 (baixo consumo)
+# Vario ESP32-C3 — Fase 3 (BLE para XCTrack)
 
-Vario sonoro com fusão acelerômetro + barômetro (Kalman), para parapente. A CPU dorme em light sleep entre as amostras e é acordada 50 vezes por segundo pelo INT do MPU-6050.
+Vario sonoro com fusão acelerômetro + barômetro (Kalman), para parapente. A CPU dorme em light sleep entre as amostras e é acordada 50 vezes por segundo pelo INT do MPU-6050. Opcionalmente, envia `$LK8EX1` por Bluetooth LE para o XCTrack ou o XCSoar.
 
 **Hardware:** ESP32-C3 SuperMini + GY-521 (MPU-6050) + GY-63 (MS5611) + piezo passivo + botão + LiPo via TP4056.
 
@@ -34,13 +34,14 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 ```
 
 - Não use GPIO2, 8 e 9 (definem o modo de boot) nem GPIO18 e 19 (USB).
-- **Montagem do IMU:** a seta **X do GY-521 aponta para a frente** (direção de voo), com a placa mais ou menos na horizontal. Isso é necessário para a compensação centrífuga (`AIRSPEED_MS`).
+- **Montagem do IMU:** a seta **X do GY-521 aponta para a frente** (direção de voo), com a placa mais ou menos na horizontal. Isso é necessário para a compensação centrífuga (`airspeed`).
 
 ## Compilar
 
 1. Arduino IDE com o core **esp32 da Espressif, versão 3.x** (Gerenciador de Placas).
 2. Placa **ESP32C3 Dev Module**, com **USB CDC On Boot = Enabled**.
-3. Abrir `vario_esp32c3.ino` e gravar. Não precisa de biblioteca externa.
+3. Instalar a biblioteca **NimBLE-Arduino 2.x** (h2zero) pelo Gerenciador de Bibliotecas.
+4. Abrir `vario_esp32c3.ino` e gravar.
 
 **Gravar com o vario ligado:** no light sleep a porta USB some do PC. Para gravar:
 - desligue o vario (botão 2 s) e conecte o USB, ou
@@ -57,9 +58,11 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 | Ação | Resultado |
 |---|---|
 | Segurar o botão ~1 s | Liga. Deixe **parado ~2 s** para calibrar. Toca um tom subindo e depois 1 a 4 bipes de bateria |
-| Clique curto | Volume: mudo → baixo → médio → alto (fica salvo para o próximo voo) |
+| 1 clique | Volume: mudo → baixo → médio → alto (fica salvo para o próximo voo) |
+| 2 cliques | Liga/desliga o BLE (fica salvo). Liga = dois bipes subindo; desliga = dois descendo |
 | Segurar 2 s | Desliga (três tons descendo) |
-| 20 min sem subir/descer e sem girar | Desliga sozinho |
+| 20 min sem subir/descer e sem girar | Desliga sozinho (`autoOffMin`) |
+| BLE ligado e nenhum celular conectado por 5 min | Só o BLE desliga (dois bipes descendo) e o vario volta ao modo econômico. No próximo boot ele tenta de novo |
 | 2 bipes graves no boot | MS5611 não encontrado (fiação ou endereço) |
 | 3 bipes graves no boot | MPU-6050 não encontrado |
 | 1 bipe grave depois de ligar | Mexeu durante a calibração. Funciona, mas desligue e ligue de novo parado |
@@ -68,7 +71,7 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 **Som:**
 - **Bipes** a partir de +0,1 m/s. Sobem de tom e ficam mais rápidos com a subida.
 - **Tom contínuo grave** abaixo de −2,5 m/s (alarme de afundamento).
-- Para mudar, edite `VarioAudioCfg` em `vario_audio.h`.
+- Os limiares, tons e filtros ficam em `settings.h` e são salvos na flash. Na fase 4 eles poderão ser editados pelo portal de configuração.
 
 ## Testes em solo (antes de voar)
 
@@ -76,18 +79,29 @@ GPIO0, GPIO1 ->  os dois terminais do piezo
 2. **Parado na mesa:** `climb` deve ficar em ±0,05 m/s e `bias` deve se acomodar perto de 0.
 3. **Levantar o vario ~1 m rápido e segurar:** `climb` dá um pico positivo imediato e volta a 0. A altitude sobe ~1 m e fica.
 4. **Escada ou elevador:** subindo um andar (~3 m em 10 s), `climb` deve ficar em +0,3 m/s e o vario deve apitar.
-5. **Girar o vario na mão** (inclinar, rodar) sem subir nem descer: `climb` deve ficar perto de 0. Se não ficar, confira a montagem e o `AIRSPEED_MS`.
+5. **Girar o vario na mão** (inclinar, rodar) sem subir nem descer: `climb` deve ficar perto de 0. Se não ficar, confira a montagem e o `airspeed`.
 6. **Carro numa rampa ou serra:** é o melhor teste antes do voo.
+7. **BLE:** dois cliques, e no celular o app **nRF Connect** deve mostrar `Vario-C3` com o serviço `6E400001…`. Ao assinar as notificações do TX (`6E400003…`) chegam linhas `$LK8EX1,…`.
+
+## XCTrack
+
+1. Ligue o BLE no vario (dois cliques).
+2. No XCTrack: **Menu → Preferências → Sensores** → ative o sensor externo por **Bluetooth LE** e escolha `Vario-C3`.
+3. A sentença enviada é `$LK8EX1,pressão(Pa),99999,vario(cm/s),temp,bateria(V),*CS`, a 10 Hz (`bleHz`). O campo de altitude vai como 99999 (não disponível), então o app calcula a altitude pela pressão.
+
+O vario do har-in-air usa o mesmo serviço (Nordic UART) e foi validado com o XCTrack. Este firmware ainda não foi testado com o app.
 
 ## Ajuste fino (depois dos primeiros voos)
 
+Os nomes abaixo são campos de `Settings`, em `settings.h`.
+
 | Sintoma | O que mexer |
 |---|---|
-| Som "nervoso" demais em turbulência | Aumentar `KF_SIGMA_BARO` (0,25 → 0,4) ou diminuir `KF_SIGMA_ACC` |
-| Demora a reagir na entrada da térmica | Aumentar `KF_SIGMA_ACC` (0,35 → 0,5) |
-| Subida falsa ao centrar a térmica | Diminuir `AIRSPEED_MS` (é melhor errar para menos) |
-| Afundamento falso ao sair da curva | Aumentar `AIRSPEED_MS` aos poucos |
-| Apita no planeio com ar parado | Subir `liftOn` em `vario_audio.h` |
+| Som "nervoso" demais em turbulência | Aumentar `kfBaro` (0,25 → 0,4) ou diminuir `kfAcc` |
+| Demora a reagir na entrada da térmica | Aumentar `kfAcc` (0,35 → 0,5) |
+| Subida falsa ao centrar a térmica | Diminuir `airspeed` (é melhor errar para menos) |
+| Afundamento falso ao sair da curva | Aumentar `airspeed` aos poucos |
+| Apita no planeio com ar parado | Subir `liftOn` |
 
 ## Simulação no PC
 
@@ -111,6 +125,12 @@ Resultado atual:
 
 A simulação é idealizada: não tem turbulência real, vibração nem erro de pressão estática. Ela valida a lógica, não substitui o voo.
 
+`test/test_lk8ex1.cpp` confere o formato e o checksum da sentença BLE, inclusive a quebra em pedaços quando o MTU é pequeno:
+
+```
+g++ -std=c++17 -Istubs_esp -I.. test_lk8ex1.cpp -o test_lk8ex1 && ./test_lk8ex1
+```
+
 ## Consumo
 
 Estimativa com datasheets. **Não foi medido.**
@@ -124,8 +144,10 @@ Estimativa com datasheets. **Não foi medido.**
 | **Total em silêncio** | **~6–7 mA** |
 | Apitando, com `PIEZO_KEEP_IN_SLEEP 1` | +~0,3–0,5 mA |
 | Apitando, com `PIEZO_KEEP_IN_SLEEP 0` | +~10 mA enquanto houver som |
+| **Com o BLE ativo** (sem light sleep, rádio ligado) | **~20–40 mA** no total |
 
-- **Autonomia:** ~55–65 h com 400 mAh. A fase 1 dava ~13 h.
+- **Autonomia:** ~55–65 h com 400 mAh sem BLE. A fase 1 dava ~13 h.
+- **Com BLE:** ~10–20 h com 400 mAh. É estimativa: o har-in-air **mediu ~85 mA** com BLE no vario dele, então meça o seu. Com o rádio ativo, este firmware não usa light sleep, porque o controlador BLE do core Arduino não aguenta o sleep manual. Por isso o BLE vem desligado e se desliga sozinho sem conexão.
 - **Desligado** (deep sleep): ~50–80 µA, ou seja, meses de bateria parada. Para guardar por muito tempo, uma chave física na bateria resolve.
 
 **Como medir:** multímetro na escala de mA **em série com a bateria**, com o USB desconectado. O multímetro tira a média dos picos de 50 Hz. Meça três situações:
@@ -143,6 +165,7 @@ Estimativa com datasheets. **Não foi medido.**
 
 ## Limitações
 
-- **Sem BLE ou XCTrack** (fase 3).
+- **Sem portal de configuração** (fase 4). Por enquanto, os padrões ficam em `settings.h`.
+- Com o BLE ativo, não há light sleep.
 - A calibração do acelerômetro corrige só a escala geral. Os offsets por eixo ficam com o estado de bias do Kalman.
 - O código não foi testado em hardware real. Só passou pela checagem de sintaxe com stubs e pela simulação.

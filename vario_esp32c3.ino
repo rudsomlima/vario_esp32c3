@@ -1,45 +1,50 @@
 // vario_esp32c3.ino - Vario audio com fusao acelerometro + barometro
-// FASE 2: baixo consumo - light sleep entre amostras, acordado pelo INT do MPU.
+// FASE 3: baixo consumo (light sleep) + BLE opcional ($LK8EX1 p/ XCTrack).
 //
 // Hardware: ESP32-C3 SuperMini + GY-521 (MPU-6050) + GY-63 (MS5611)
 //           + piezo passivo entre GPIO0 e GPIO1 + botao GPIO3->GND
 //           + LiPo via TP4056 (com protecao) no pino 5V
 // Core: Arduino-ESP32 3.x  |  Placa: "ESP32C3 Dev Module", USB CDC On Boot = Enabled
+// Biblioteca: NimBLE-Arduino 2.x (h2zero)
 //
 // Pinagem
 //   GPIO6 SDA, GPIO7 SCL -> MS5611 (0x77) + MPU-6050 (0x68), 3V3 e GND
-//   GPIO5 <- INT do MPU-6050 (OBRIGATORIO na fase 2: e ele que acorda a CPU)
+//   GPIO5 <- INT do MPU-6050 (OBRIGATORIO: e ele que acorda a CPU)
 //   GPIO3 <- botao para GND (+ pull-up externo 100k)
 //   GPIO4 <- divisor da bateria: BAT+ -- 1M -- GPIO4 -- 1M -- GND (+100nF em GPIO4)
 //   GPIO0/GPIO1 -> piezo
 //
-// Botao: curto = volume (mudo/baixo/medio/alto, fica salvo) | longo 2 s = desliga
-//        ligar = segurar ~1 s
+// Botao: 1 clique  = volume (mudo/baixo/medio/alto)
+//        2 cliques = liga/desliga BLE
+//        segurar 2 s = desliga | ligar = segurar ~1 s
 //
 // Ciclo (50x por segundo):
 //   [light sleep] --INT do MPU--> le IMU -> Mahony -> Kalman predict
 //   -> (a cada 2) le MS5611 + dispara proxima conversao -> Kalman update
-//   -> som -> botao -> [light sleep]
-// O MS5611 converte e o PWM do piezo toca enquanto a CPU dorme.
+//   -> som -> BLE -> botao -> [light sleep]
+// Com o BLE ativo nao ha light sleep (o radio precisa do clock); por isso o
+// BLE se desliga sozinho se ninguem conectar em bleTimeoutMin minutos.
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <Preferences.h>
 #include <esp_sleep.h>
 #include "driver/gpio.h"
+#include "settings.h"
 #include "ms5611.h"
 #include "imu_mpu6050.h"
 #include "mahony_gravity.h"
 #include "kalman_vario.h"
 #include "vario_audio.h"
 #include "piezo_idf.h"
+#include "ble_lk8ex1.h"
 
-// ---------------- configuracao ----------------
-#define LOW_POWER            1  // 1 = light sleep entre amostras (fase 2)
+// ---------------- configuracao de compilacao ----------------
+#define LOW_POWER            1  // 1 = light sleep entre amostras
 #define PIEZO_KEEP_IN_SLEEP  1  // 1 = PWM no RC_FAST, dorme ate apitando. Se o som
                                 //     falhar/engasgar, ponha 0 (fica acordado so ao apitar)
 #define DEBUG_PLOT           0  // 1 = Serial Plotter. DESLIGA o sleep (o USB cai no light sleep)
 
+const char    BLE_NAME[] = "Vario-C3";
 const uint8_t PIN_SDA = 6, PIN_SCL = 7;
 const uint8_t PIN_MPU_INT = 5;
 const uint8_t PIN_BUTTON = 3;
@@ -48,32 +53,26 @@ const uint8_t PIN_PIEZO_A = 0, PIN_PIEZO_B = 1;
 
 const uint8_t  BARO_EVERY_TICKS = 2;    // 25 Hz de pressao (tick = amostra do MPU, 50 Hz)
 const uint8_t  TEMP_EVERY_CONV  = 25;   // 1 temperatura por segundo
-const uint32_t AUTO_OFF_MS      = 20UL * 60UL * 1000UL;  // 20 min sem atividade
-const float    AUTO_OFF_CLIMB   = 0.3f;  // m/s
-const float    AUTO_OFF_GYRO    = 0.5f;  // rad/s (soma |gx|+|gy|+|gz|)
+const float    AUTO_OFF_CLIMB   = 0.3f; // m/s
+const float    AUTO_OFF_GYRO    = 0.5f; // rad/s (soma |gx|+|gy|+|gz|)
+const uint32_t CLICK_GAP_MS     = 400;  // janela para o 2o clique
 
-// Compensacao centrifuga: velocidade de voo em termica (m/s). ~9 m/s = 32 km/h.
-// O eixo X do GY-521 deve apontar para a FRENTE (se apontar para tras: -9.0).
-// Errar para MENOS e mais seguro que para mais (ver test/sim_flight.cpp). 0 = desliga.
-const float AIRSPEED_MS = 9.0f;
-
-// Kalman: ajuste fino depois de voar (ver README)
-const float KF_SIGMA_ACC  = 0.35f;  // m/s^2
-const float KF_SIGMA_BIAS = 0.02f;  // m/s^2/sqrt(s)
-const float KF_SIGMA_BARO = 0.25f;  // m
+// As demais configuracoes (som, filtros, auto-off, BLE) ficam em settings.h / NVS.
 
 // --------------------------------------------
+SettingsStore cfg;
 MS5611        baro;
 ImuMPU6050    imu;
 MahonyGravity ahrs;
 KalmanVario   kf;
 VarioAudio    audio;
 PiezoIDF      piezo;
-Preferences   prefs;
+BleLK8EX1     ble;
 
 static uint32_t tickCount = 0, convCount = 0;
 static uint32_t lastActivityMs = 0;
 static uint32_t lastMicros = 0;
+static uint32_t bleLastConnMs = 0;
 static float    batteryV = 0, lastAVert = 0;
 static bool     intOk = false;   // INT do MPU funcionando -> pode dormir
 
@@ -92,7 +91,30 @@ static int batteryBars(float v) {        // 1..4 bipes
   return 1;
 }
 
+static void applySettings() {
+  const Settings &s = cfg.s;
+  audio.cfg.liftOn     = s.liftOn;
+  audio.cfg.liftOff    = s.liftOn - 0.05f;
+  audio.cfg.sinkOn     = s.sinkOn;
+  audio.cfg.sinkOff    = s.sinkOn + 0.2f;
+  audio.cfg.fBase      = s.fBase;
+  audio.cfg.fPerMs     = s.fPerMs;
+  audio.cfg.periodZero = (uint16_t)s.periodZero;
+  ahrs.airspeed        = s.airspeed;
+}
+
+// Sinais sonoros curtos (sempre no volume alto)
+static void chirp(uint16_t f1, uint16_t f2) {
+  auto v = piezo.volume();
+  piezo.setVolume(PiezoIDF::VOL_HIGH);
+  piezo.beep(f1, 70); delay(40); piezo.beep(f2, 90);
+  piezo.setVolume(v);
+}
+static void chirpBleOn()  { chirp(1500, 2000); }
+static void chirpBleOff() { chirp(2000, 1500); }
+
 static void goToSleep() {
+  ble.end();
   // desarma o timer/GPIO do light sleep, senao o deep sleep acorda em 50 ms
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_BUTTON, ESP_GPIO_WAKEUP_GPIO_LOW);
@@ -114,9 +136,14 @@ static void fatal(int beeps) {
   goToSleep();
 }
 
+static void bleStart() {
+  if (ble.begin(BLE_NAME)) { bleLastConnMs = millis(); chirpBleOn(); }
+  else { piezo.beep(300, 400); }
+}
+
 static bool sleepAllowed() {
 #if LOW_POWER && !DEBUG_PLOT
-  return intOk && (!piezo.playing() || piezo.keepsRunningInSleep());
+  return intOk && !ble.active() && (!piezo.playing() || piezo.keepsRunningInSleep());
 #else
   return false;
 #endif
@@ -134,12 +161,11 @@ static void waitForImuData() {
 
 // ---------- setup ----------
 void setup() {
-  setCpuFrequencyMhz(80);                // suficiente; 160 MHz so gasta mais
+  setCpuFrequencyMhz(80);                // suficiente (e o minimo com radio ligado)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   pinMode(PIN_MPU_INT, INPUT);
 
-  bool keep = PIEZO_KEEP_IN_SLEEP;
-  if (!piezo.begin(PIN_PIEZO_A, PIN_PIEZO_B, keep)) {
+  if (!piezo.begin(PIN_PIEZO_A, PIN_PIEZO_B, PIEZO_KEEP_IN_SLEEP)) {
     piezo.begin(PIN_PIEZO_A, PIN_PIEZO_B, false);   // RC_FAST nao aceito: fallback
   }
 
@@ -154,9 +180,8 @@ void setup() {
   Serial.begin(115200);
 #endif
 
-  prefs.begin("vario", false);
-  uint8_t vol = prefs.getUChar("vol", PiezoIDF::VOL_HIGH);
-  if (vol > PiezoIDF::VOL_HIGH) vol = PiezoIDF::VOL_HIGH;
+  cfg.load();
+  applySettings();
 
   Wire.begin(PIN_SDA, PIN_SCL, 400000);
   if (!baro.begin(Wire)) fatal(2);       // 2 bipes graves = MS5611 nao encontrado / CRC
@@ -176,7 +201,7 @@ void setup() {
   float sx = 0, sy = 0, sz = 0;
   for (int i = 0; i < 20; i++) { delay(20); imu.read(); sx += imu.ax; sy += imu.ay; sz += imu.az; }
   ahrs.begin();
-  ahrs.airspeed = AIRSPEED_MS;
+  applySettings();                       // ahrs.begin() nao mexe no airspeed, mas garante
   ahrs.alignToAccel(sx, sy, sz);
 
   // Altitude inicial: media de algumas leituras
@@ -187,7 +212,7 @@ void setup() {
     if (baro.readResult()) { hSum += MS5611::altitudeM(baro.pressurePa()); hN++; }
   }
   if (hN == 0) fatal(2);
-  kf.begin(hSum / hN, KF_SIGMA_ACC, KF_SIGMA_BIAS, KF_SIGMA_BARO);
+  kf.begin(hSum / hN, cfg.s.kfAcc, 0.02f, cfg.s.kfBaro);
 
   // "pronto": tom subindo + 1..4 bipes de bateria (sempre audiveis)
   batteryV = readBatteryV();
@@ -195,7 +220,9 @@ void setup() {
   piezo.beep(600, 80); piezo.beep(900, 80); piezo.beep(1300, 120);
   delay(300);
   for (int i = 0; i < batteryBars(batteryV); i++) { piezo.beep(1000, 60); delay(120); }
-  piezo.setVolume((PiezoIDF::Volume)vol);
+  piezo.setVolume((PiezoIDF::Volume)cfg.s.volume);
+
+  if (cfg.s.bleEnabled) { delay(200); bleStart(); }
 
   // Fontes de despertar do light sleep: INT do MPU (nivel alto) + timer de seguranca
   gpio_wakeup_enable((gpio_num_t)PIN_MPU_INT, GPIO_INTR_HIGH_LEVEL);
@@ -209,27 +236,55 @@ void setup() {
 }
 
 // ---------- botao ----------
-static void handleButton(uint32_t now) {
-  static uint32_t pressedAt = 0;
-  static bool wasPressed = false;
-  bool p = digitalRead(PIN_BUTTON) == LOW;
-  if (p && !wasPressed) pressedAt = now;
-  if (p && now - pressedAt > 2000) powerOff();
-  if (!p && wasPressed && now - pressedAt > 30) {          // clique curto: volume
+static void onClicks(int n, uint32_t now) {
+  if (n == 1) {                                           // volume
     auto v = (PiezoIDF::Volume)((piezo.volume() + 1) % 4);
     piezo.play(0);
     if (v == PiezoIDF::VOL_MUTE) {
       piezo.setVolume(PiezoIDF::VOL_LOW);
-      piezo.beep(400, 150);                                // "mudo"
+      piezo.beep(400, 150);                               // "mudo"
     } else {
       piezo.setVolume(v);
       for (int i = 0; i < (int)v; i++) { piezo.beep(1000, 50); delay(80); }
     }
     piezo.setVolume(v);
-    prefs.putUChar("vol", (uint8_t)v);                     // lembra no proximo voo
-    lastActivityMs = now;
+    cfg.s.volume = (uint8_t)v;
+    cfg.saveVolume();                                     // lembra no proximo voo
+  } else if (n == 2) {                                    // BLE liga/desliga
+    piezo.play(0);
+    cfg.s.bleEnabled = !ble.active();
+    cfg.saveBleEnabled();
+    if (cfg.s.bleEnabled) bleStart();
+    else { ble.end(); chirpBleOff(); }
   }
+  lastActivityMs = now;
+}
+
+static void handleButton(uint32_t now) {
+  static uint32_t pressedAt = 0, releasedAt = 0;
+  static bool wasPressed = false;
+  static int clicks = 0;
+  bool p = digitalRead(PIN_BUTTON) == LOW;
+  if (p && !wasPressed) pressedAt = now;
+  if (p && now - pressedAt > 2000) powerOff();
+  if (!p && wasPressed && now - pressedAt > 30) { clicks++; releasedAt = now; }
+  if (!p && clicks > 0 && now - releasedAt > CLICK_GAP_MS) { onClicks(clicks, now); clicks = 0; }
   wasPressed = p;
+}
+
+// ---------- BLE ----------
+static void serviceBle(uint32_t now, float climb) {
+  if (!ble.active()) return;
+  uint32_t every = (uint32_t)lroundf(50.0f / cfg.s.bleHz);
+  if (every < 1) every = 1;
+  if (tickCount % every == 0)
+    ble.send(baro.pressurePa(), climb, baro.temperatureC(), batteryV);
+  if (ble.connected()) { bleLastConnMs = now; lastActivityMs = now; return; }
+  // ninguem conectado ha bleTimeoutMin: desliga o BLE para voltar ao light sleep
+  if (cfg.s.bleTimeoutMin > 0 && now - bleLastConnMs > (uint32_t)(cfg.s.bleTimeoutMin * 60000.0f)) {
+    ble.end();
+    chirpBleOff();   // nao muda cfg.s.bleEnabled: no proximo boot tenta de novo
+  }
 }
 
 // ---------- loop ----------
@@ -262,10 +317,13 @@ void loop() {
   // 3) Som
   piezo.play(audio.tick(climb, now));
 
-  // 4) Bateria a cada 10 s, botao, auto-off
+  // 4) BLE
+  serviceBle(now, climb);
+
+  // 5) Bateria a cada 10 s, botao, auto-off
   if (tickCount % 500 == 0) batteryV = readBatteryV();
   handleButton(now);
-  if (now - lastActivityMs > AUTO_OFF_MS) powerOff();
+  if (cfg.s.autoOffMin > 0 && now - lastActivityMs > (uint32_t)(cfg.s.autoOffMin * 60000.0f)) powerOff();
 
 #if DEBUG_PLOT
   if (tickCount % 5 == 0) {   // 10 Hz, formato do Serial Plotter
